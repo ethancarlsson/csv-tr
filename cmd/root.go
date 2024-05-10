@@ -79,6 +79,7 @@ func buildColumnFilterMap(filterOut []string) (map[int][]string, error) {
 }
 
 var filterOut []string
+var filterIn []string
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
@@ -92,12 +93,13 @@ var rootCmd = &cobra.Command{
 		var err error
 		// we process the input reader, wherever to be his origin
 		sep := cmd.Flag("seperator")
+		sepOut := cmd.Flag("sep-out").Value.String()
 		filterInteractiveFlag := cmd.Flag("filter-interactive").Value.String()
 		interactiveFilterCol, err := strconv.ParseInt(filterInteractiveFlag, 10, 64)
 
 		shouldFilterInteractively := filterInteractiveFlag != "-1"
 
-		if interactiveFilterCol < 0 {
+		if interactiveFilterCol < 0 && shouldFilterInteractively {
 			return fmt.Errorf("filter-interactive needs to use a column within the csv, column %d does not exist", interactiveFilterCol)
 		}
 
@@ -110,6 +112,13 @@ var rootCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+
+		filterInMap, err := buildColumnFilterMap(filterIn)
+
+		if err != nil {
+			return err
+		}
+
 		reader := bufio.NewReader(cmd.InOrStdin())
 
 		newCsv := make([]string, len(args))
@@ -128,9 +137,13 @@ var rootCmd = &cobra.Command{
 
 		lines := make([]string, 0, 1000)
 		var v string
-		for err == nil {
 
+		for err == nil {
 			v, err = reader.ReadString('\n')
+
+			if len(strings.TrimSpace(v)) == 0 {
+				break
+			}
 
 			lines = append(lines, v)
 		}
@@ -145,7 +158,7 @@ var rootCmd = &cobra.Command{
 		stderr := cmd.OutOrStderr()
 
 		for _, l := range lines {
-			shouldAppend := true
+			fmt.Printf("%v\n", filterInMap)
 			line := strings.Split(string(l), sep.Value.String())
 
 			for from, list := range filterOutMap {
@@ -154,15 +167,30 @@ var rootCmd = &cobra.Command{
 				}
 
 				if slices.Contains[[]string, string](list, line[from]) {
-					shouldAppend = false
+					continue
 
 				}
 			}
 
-			// This block only runs when running in interactive
-			if shouldFilterInteractively {
+
+			shouldAppend := false
+
+			for from, list := range filterInMap {
+				if from >= len(line) || from < 0 {
+					continue
+				}
+
+				if slices.Contains[[]string, string](list, line[from]) {
+					shouldAppend = true
+					continue
+				}
+			}
+
+			// This block only runs when running in interactive. And where we haven't already decided to append
+			filterColKey := int(interactiveFilterCol)
+			if shouldFilterInteractively && !shouldAppend {
 				stderr.Write([]byte(l))
-				stderr.Write([]byte("y/n"))
+				stderr.Write([]byte("Include? (y/n) "))
 
 				_, err := tty.Read(buf)
 
@@ -170,15 +198,29 @@ var rootCmd = &cobra.Command{
 					return fmt.Errorf("Couldn't read TTY for user input: %s", err)
 				}
 
-				if string(buf[0]) != "y" {
+				if filterColKey >= len(line) {
+					continue
+				}
+
+				for string(buf[0]) != "y" && string(buf[0]) != "n" {
+					buf = make([]byte, 1024)
+					stderr.Write([]byte("Include? (y/n) "))
+					_, err := tty.Read(buf)
+					if err != nil {
+						return fmt.Errorf("Couldn't read TTY for user input: %s", err)
+					}
+				}
+
+				if string(buf[0]) == "n" {
 					stderr.Write([]byte("✕\n"))
 
-					filterOutMap[int(interactiveFilterCol)] = append(filterOutMap[int(interactiveFilterCol)], line[interactiveFilterCol])
-
-					continue
-
+					filterOutMap[filterColKey] = append(filterOutMap[filterColKey], line[filterColKey])
+					shouldAppend = false
+				} else {
+					filterInMap[filterColKey] = append(filterInMap[filterColKey], line[filterColKey])
+					stderr.Write([]byte("✓\n"))
+					shouldAppend = true
 				}
-				stderr.Write([]byte("✓\n"))
 
 				buf = make([]byte, 1024)
 			}
@@ -206,14 +248,27 @@ var rootCmd = &cobra.Command{
 			}
 
 			if shouldAppend {
-				newCsv = append(newCsv, strings.Join(newLine, sep.Value.String()))
+				newCsv = append(newCsv, strings.Join(newLine, sepOut))
 			}
 		}
 
 		defer tty.Close()
 
 		writer := cmd.OutOrStdout()
-		_, err = writer.Write([]byte(strings.Join(newCsv, "\n")))
+		_, err = writer.Write([]byte(strings.Join(newCsv, "\n") + "\n"))
+
+		if shouldFilterInteractively {
+			filterList := make([]string, 0)
+			// put the filter back together
+			for col, list := range filterOutMap {
+				for _, v := range list {
+					filterList = append(filterList, fmt.Sprintf("%d=%s", col, v))
+				}
+			}
+
+			stderr.Write([]byte(strings.Join(filterList, ",")))
+		}
+
 		return err
 	},
 }
@@ -221,7 +276,6 @@ var rootCmd = &cobra.Command{
 // Execute adds all child commands to the root command and sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute() {
-
 	err := rootCmd.Execute()
 	if err != nil {
 		os.Exit(1)
@@ -237,15 +291,18 @@ func init() {
 
 	// Cobra also supports local flags, which will only run
 	// when this action is called directly.
-	rootCmd.Flags().StringP("seperator", "s", ",", "Provide a different seperator for other formats like psv or tsv.")
+	rootCmd.Flags().StringP("seperator", "s", ",", "Provide a different seperator for other formats like psv or tsv")
+	rootCmd.Flags().StringP("sep-out", "p", ",", "Provide the desired seperator for the output csv, tsv etc.")
 
 	strSlice := make([]string, 0)
 	rootCmd.Flags().StringSliceVarP(&filterOut, "filter-out", "f", strSlice, "-f {col_number}={string}")
+	strSliceIn := make([]string, 0)
+	rootCmd.Flags().StringSliceVarP(&filterIn, "filter-in", "n", strSliceIn, "-n {col_number}={string}")
 
 	rootCmd.Flags().IntP(
 		"filter-interactive",
 		"i",
 		-1,
-		"-i {number}. Where {number} is the column in the original csv that should be checked for filtering. Negative numbers or numbers greater than the amount of columns in the original csv will be ignored.",
+		"-i {number}. Where {number} is the column in the original csv that should be checked for filtering. Negative numbers or numbers greater than the amount of columns in the original csv will be ignored and will not start interactive mode. Once finished all the excluded then included values are returned in std error so they can be used in the next run.",
 	)
 }
