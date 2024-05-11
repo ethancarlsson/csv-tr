@@ -92,6 +92,7 @@ var rootCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		var err error
 		// we process the input reader, wherever to be his origin
+
 		sep := cmd.Flag("seperator")
 		sepOut := cmd.Flag("sep-out").Value.String()
 		filterInteractiveFlag := cmd.Flag("filter-interactive").Value.String()
@@ -158,7 +159,6 @@ var rootCmd = &cobra.Command{
 		stderr := cmd.OutOrStderr()
 
 		for _, l := range lines {
-			fmt.Printf("%v\n", filterInMap)
 			line := strings.Split(string(l), sep.Value.String())
 
 			for from, list := range filterOutMap {
@@ -172,7 +172,6 @@ var rootCmd = &cobra.Command{
 				}
 			}
 
-
 			shouldAppend := false
 
 			for from, list := range filterInMap {
@@ -182,7 +181,6 @@ var rootCmd = &cobra.Command{
 
 				if slices.Contains[[]string, string](list, line[from]) {
 					shouldAppend = true
-					continue
 				}
 			}
 
@@ -231,6 +229,13 @@ var rootCmd = &cobra.Command{
 				continue
 			}
 
+			// This is used to replace seperators in the output column
+			// Ensures the csv isn't messed up
+			newSepOut := make([]rune, len(sepOut))
+			for i, sep := range newSepOut {
+				newSepOut[i] = sep + 1
+			}
+
 			for _, fromTo := range colMap {
 				from := fromTo[0]
 				to := fromTo[1]
@@ -244,7 +249,10 @@ var rootCmd = &cobra.Command{
 					continue
 				}
 
-				newLine[to] = line[from]
+				fromLine := line[from]
+
+				newLine[to] = strings.ReplaceAll(fromLine, sepOut, string(newSepOut))
+
 			}
 
 			if shouldAppend {
@@ -258,15 +266,58 @@ var rootCmd = &cobra.Command{
 		_, err = writer.Write([]byte(strings.Join(newCsv, "\n") + "\n"))
 
 		if shouldFilterInteractively {
-			filterList := make([]string, 0)
+			storeFiltersAt := cmd.Flag("store-filters").Value.String()
+
+			filterOutList := make([]string, 0)
 			// put the filter back together
 			for col, list := range filterOutMap {
 				for _, v := range list {
-					filterList = append(filterList, fmt.Sprintf("%d=%s", col, v))
+					filterOutList = append(filterOutList, fmt.Sprintf("%d=%s", col, v))
 				}
 			}
 
-			stderr.Write([]byte(strings.Join(filterList, ",")))
+			filterInList := make([]string, 0)
+			// put the filter in back together
+			for col, list := range filterInMap {
+				for _, v := range list {
+					filterInList = append(filterInList, fmt.Sprintf("%d=%s", col, v))
+				}
+			}
+
+			if storeFiltersAt == "" {
+				stderr.Write([]byte(strings.Join(filterOutList, ",")))
+				stderr.Write([]byte(strings.Join(filterInList, ",")))
+				return err
+			}
+
+			foutPath := storeFiltersAt + "/fout.txt"
+			newFilterOutFile, err := os.Create(foutPath)
+
+			if err != nil {
+				return fmt.Errorf("Could not create file at %s\n%s", foutPath, err)
+			}
+
+			_, err = newFilterOutFile.Write([]byte(strings.Join(filterOutList, ",")))
+
+			if err != nil {
+				return fmt.Errorf("Could not write to file at %s\n%s", foutPath, err)
+			}
+
+			finPath := storeFiltersAt + "/fin.txt"
+			newFilterInFile, err := os.Create(finPath)
+
+			if err != nil {
+				return fmt.Errorf("Could not create file at %s\n%s", finPath, err)
+			}
+
+			_, err = newFilterInFile.Write([]byte(strings.Join(filterInList, ",")))
+
+			if err != nil {
+				return fmt.Errorf("Could not write to file at %s\n%s", finPath, err)
+			}
+
+			newFilterInFile.Close()
+			newFilterOutFile.Close()
 		}
 
 		return err
@@ -303,6 +354,12 @@ func init() {
 		"filter-interactive",
 		"i",
 		-1,
-		"-i {number}. Where {number} is the column in the original csv that should be checked for filtering. Negative numbers or numbers greater than the amount of columns in the original csv will be ignored and will not start interactive mode. Once finished all the excluded then included values are returned in std error so they can be used in the next run.",
+		"-i {number}. Where {number} is the column in the original csv that should be checked for filtering. Negative numbers or numbers greater than the amount of columns in the original csv will be ignored and will not start interactive mode. Once finished all the excluded then included values are returned in std error so they can be used in the next run. --store-filters /path to store the filter results in files at .",
+	)
+
+	rootCmd.Flags().String(
+		"store-filters",
+		"",
+		"Path to the directory where filters should be stored. If empty filters will be returned to stderr. Filter file names will be `fin.txt` and `fout.txt`",
 	)
 }
