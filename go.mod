@@ -1,4 +1,4 @@
-module csv-transform-remember
+module csv-tr
 
 go 1.21.0
 

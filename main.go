@@ -1,6 +1,6 @@
 package main
 
-import "csv-transform-remember/cmd"
+import "csv-tr/cmd"
 
 func main() {
 	cmd.Execute()
