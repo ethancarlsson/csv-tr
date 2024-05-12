@@ -108,10 +108,25 @@ var rootCmd = &cobra.Command{
 			return fmt.Errorf("filter-interactive must accept an integer, %s given", filterInteractiveFlag)
 		}
 
+		// get filters
+		if len(filterOut) == 1 {
+			fileContents, err := os.ReadFile(filterOut[0])
+			if err == nil {
+				filterOut = strings.Split(string(fileContents), "﹐")
+			}
+		}
+
 		filterOutMap, err := buildColumnFilterMap(filterOut)
 
 		if err != nil {
 			return err
+		}
+
+		if len(filterIn) == 1 {
+			fileContents, err := os.ReadFile(filterIn[0])
+			if err == nil {
+				filterIn = strings.Split(string(fileContents), "﹐")
+			}
 		}
 
 		filterInMap, err := buildColumnFilterMap(filterIn)
@@ -120,10 +135,10 @@ var rootCmd = &cobra.Command{
 			return err
 		}
 
+		// prepare out and readers
+
 		reader := bufio.NewReader(cmd.InOrStdin())
-
 		newCsv := make([]string, len(args))
-
 		colMap, err := getColumnMap(args)
 
 		if err != nil {
@@ -161,18 +176,22 @@ var rootCmd = &cobra.Command{
 		for _, l := range lines {
 			line := strings.Split(string(l), sep.Value.String())
 
+			shouldAppend := true
 			for from, list := range filterOutMap {
 				if from >= len(line) || from < 0 {
 					continue
 				}
 
+				// Translate back to a regular comma in case there are any ， symbols
 				if slices.Contains[[]string, string](list, line[from]) {
-					continue
-
+					shouldAppend = false
 				}
 			}
 
-			shouldAppend := false
+			if !shouldAppend {
+				continue
+			}
+			shouldAppend = false
 
 			for from, list := range filterInMap {
 				if from >= len(line) || from < 0 {
@@ -252,7 +271,6 @@ var rootCmd = &cobra.Command{
 				fromLine := line[from]
 
 				newLine[to] = strings.ReplaceAll(fromLine, sepOut, string(newSepOut))
-
 			}
 
 			if shouldAppend {
@@ -297,7 +315,12 @@ var rootCmd = &cobra.Command{
 				return fmt.Errorf("Could not create file at %s\n%s", foutPath, err)
 			}
 
-			_, err = newFilterOutFile.Write([]byte(strings.Join(filterOutList, ",")))
+			err = newFilterOutFile.Truncate(0)
+			if err != nil {
+				return fmt.Errorf("Couldn't truncate filter file %s", err)
+			}
+
+			_, err = newFilterOutFile.Write([]byte(strings.Join(filterOutList, "﹐")))
 
 			if err != nil {
 				return fmt.Errorf("Could not write to file at %s\n%s", foutPath, err)
@@ -310,7 +333,12 @@ var rootCmd = &cobra.Command{
 				return fmt.Errorf("Could not create file at %s\n%s", finPath, err)
 			}
 
-			_, err = newFilterInFile.Write([]byte(strings.Join(filterInList, ",")))
+			err = newFilterInFile.Truncate(0)
+			if err != nil {
+				return fmt.Errorf("Couldn't truncate filter file %s", err)
+			}
+
+			_, err = newFilterInFile.WriteString(strings.Join(filterInList, "﹐"))
 
 			if err != nil {
 				return fmt.Errorf("Could not write to file at %s\n%s", finPath, err)
@@ -346,9 +374,9 @@ func init() {
 	rootCmd.Flags().StringP("sep-out", "p", ",", "Provide the desired seperator for the output csv, tsv etc.")
 
 	strSlice := make([]string, 0)
-	rootCmd.Flags().StringSliceVarP(&filterOut, "filter-out", "f", strSlice, "-f {col_number}={string}")
+	rootCmd.Flags().StringSliceVarP(&filterOut, "filter-out", "f", strSlice, "-f {col_number}={string} or -f {path_to_fout.txt}")
 	strSliceIn := make([]string, 0)
-	rootCmd.Flags().StringSliceVarP(&filterIn, "filter-in", "n", strSliceIn, "-n {col_number}={string}")
+	rootCmd.Flags().StringSliceVarP(&filterIn, "filter-in", "n", strSliceIn, "-n {col_number}={string} or -n {path_to_fin.txt}")
 
 	rootCmd.Flags().IntP(
 		"filter-interactive",
