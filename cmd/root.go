@@ -67,15 +67,30 @@ func buildColumnFilterMap(filterOut []string) (map[int][]string, error) {
 			continue
 		}
 
-		filterMap[int(col)] = append(filterMap[int(col)], split[1])
+		filterMap[int(col)] = append(filterMap[int(col)], strings.TrimSpace(split[1]))
 
 	}
 
 	if len(errors) > 0 {
-		return filterMap, fmt.Errorf("All arguments to --filter-out or -f must have the format {column}={string}.\n%s", strings.Join(errors, "\n"))
+		return filterMap, fmt.Errorf("All arguments to --filter-out (-f) must have the format {column}={string}.\n%s", strings.Join(errors, "\n"))
 	}
 
 	return filterMap, nil
+}
+
+func shouldAppendLine(filterInMap map[int][]string, line []string) bool {
+
+	for from, list := range filterInMap {
+		if from >= len(line) || from < 0 {
+			continue
+		}
+
+		if slices.Contains[[]string, string](list, strings.TrimSpace(line[from])) {
+			return true
+		}
+	}
+
+	return false
 }
 
 var filterOut []string
@@ -100,12 +115,16 @@ var rootCmd = &cobra.Command{
 
 		shouldFilterInteractively := filterInteractiveFlag != "-1"
 
+		if !shouldFilterInteractively && len(filterIn) != 0 {
+			return fmt.Errorf("You cannot use the --filter-in (-n) flag if you are not also using the --filter-interactive (-i) flag")
+		}
+
 		if interactiveFilterCol < 0 && shouldFilterInteractively {
 			return fmt.Errorf("filter-interactive needs to use a column within the csv, column %d does not exist", interactiveFilterCol)
 		}
 
 		if err != nil {
-			return fmt.Errorf("filter-interactive must accept an integer, %s given", filterInteractiveFlag)
+			return fmt.Errorf("filter-interactive (-i) must accept an integer, %s given", filterInteractiveFlag)
 		}
 
 		// get filters
@@ -138,7 +157,7 @@ var rootCmd = &cobra.Command{
 		// prepare out and readers
 
 		reader := bufio.NewReader(cmd.InOrStdin())
-		newCsv := make([]string, len(args))
+		newCsv := make([]string, 0, len(args))
 		colMap, err := getColumnMap(args)
 
 		if err != nil {
@@ -183,25 +202,17 @@ var rootCmd = &cobra.Command{
 				}
 
 				// Translate back to a regular comma in case there are any ， symbols
-				if slices.Contains[[]string, string](list, line[from]) {
+				if slices.Contains[[]string, string](list, strings.TrimSpace(line[from])) {
 					shouldAppend = false
+					break
 				}
 			}
 
 			if !shouldAppend {
 				continue
 			}
-			shouldAppend = false
 
-			for from, list := range filterInMap {
-				if from >= len(line) || from < 0 {
-					continue
-				}
-
-				if slices.Contains[[]string, string](list, line[from]) {
-					shouldAppend = true
-				}
-			}
+			shouldAppend = shouldAppendLine(filterInMap, line)
 
 			// This block only runs when running in interactive. And where we haven't already decided to append
 			filterColKey := int(interactiveFilterCol)
@@ -231,10 +242,10 @@ var rootCmd = &cobra.Command{
 				if string(buf[0]) == "n" {
 					stderr.Write([]byte("✕\n"))
 
-					filterOutMap[filterColKey] = append(filterOutMap[filterColKey], line[filterColKey])
+					filterOutMap[filterColKey] = append(filterOutMap[filterColKey], strings.TrimSpace(line[filterColKey]))
 					shouldAppend = false
 				} else {
-					filterInMap[filterColKey] = append(filterInMap[filterColKey], line[filterColKey])
+					filterInMap[filterColKey] = append(filterInMap[filterColKey], strings.TrimSpace(line[filterColKey]))
 					stderr.Write([]byte("✓\n"))
 					shouldAppend = true
 				}
@@ -244,7 +255,10 @@ var rootCmd = &cobra.Command{
 
 			newLine := make([]string, newLineSize, 100)
 
-			if !shouldAppend {
+			// We don't skip if this is not interactive It will
+			// already have been skipped if it was filtered out,
+			// this is the case where it was not filtered in
+			if !shouldAppend && shouldFilterInteractively {
 				continue
 			}
 
@@ -270,12 +284,10 @@ var rootCmd = &cobra.Command{
 
 				fromLine := line[from]
 
-				newLine[to] = strings.ReplaceAll(fromLine, sepOut, string(newSepOut))
+				newLine[to] = strings.TrimSpace(strings.ReplaceAll(fromLine, sepOut, string(newSepOut)))
 			}
 
-			if shouldAppend {
-				newCsv = append(newCsv, strings.Join(newLine, sepOut))
-			}
+			newCsv = append(newCsv, strings.Join(newLine, sepOut))
 		}
 
 		defer tty.Close()
