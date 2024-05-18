@@ -5,6 +5,13 @@ csv, with columns reoganised. The tool allows for interactive filtering and can
 remember the results of previous interactive sessions so the next run can be
 partially automated.
 
+## Installation
+
+### Go
+```
+go install github.com/ethancarlsson/csv-tr
+```
+
 ## Usage
 
 This tool only works on streams, so if you have a csv file you need to get it
